@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "847944892063",
+    "firebase_url": "https://crashguard-c3f65-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "crashguard-c3f65",
+    "storage_bucket": "crashguard-c3f65.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:847944892063:android:8fb6f87ec9395a5be3acaa",
+        "android_client_info": {
+          "package_name": "com.example.crash_guard"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDHHd3MhNkyaK6BuD0m9GOsFFWAJc6XXBM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

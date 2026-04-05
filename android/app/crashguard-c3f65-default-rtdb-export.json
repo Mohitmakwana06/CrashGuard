@@ -1,0 +1,55 @@
+{
+  "accidents": {
+    "1": {
+      "device_id": "ESP32_A4CF12345678",
+      "latitude": 19.07,
+      "longitude": 72.87,
+      "status": "ACCIDENT",
+      "timestamp": "test"
+    },
+    "CrashGuard_ESP32": {
+      "-Op8yCPBuKDl6RCOVPO9": {
+        "device_id": "CrashGuard_ESP32",
+        "latitude": 28.6139,
+        "longitude": 77.209,
+        "status": "HANDLED",
+        "timestamp": "2026-04-01T16:55:37.867119Z"
+      },
+      "-Op8y_xKAqvnntmt4DVE": {
+        "device_id": "CrashGuard_ESP32",
+        "latitude": 28.6139,
+        "longitude": 77.209,
+        "status": "HANDLED",
+        "timestamp": "2026-04-01T16:57:18.421470Z"
+      },
+      "-Op90iKTxt5hYKG-rvU2": {
+        "device_id": "CrashGuard_ESP32",
+        "latitude": 28.6139,
+        "longitude": 77.209,
+        "status": "HANDLED",
+        "timestamp": "2026-04-01T17:10:59.165151Z"
+      },
+      "-OpJFWC-uWipt3vEbTJq": {
+        "device_id": "CrashGuard_ESP32",
+        "latitude": 28.6139,
+        "longitude": 77.209,
+        "status": "HANDLED",
+        "timestamp": "2026-04-03T16:51:49.694345Z"
+      }
+    },
+    "ESP32_001": {
+      "-Op8IuHoE1MsMHzN1bzw": {
+        "device_id": "ESP32_001",
+        "latitude": 28.6139,
+        "longitude": 77.209,
+        "status": "HANDLED",
+        "timestamp": "2026-04-01T13:50:49.522454Z"
+      }
+    }
+  },
+  "devices": {
+    "ESP32_F82833FE8CE0": {
+      "status": "online"
+    }
+  }
+}
