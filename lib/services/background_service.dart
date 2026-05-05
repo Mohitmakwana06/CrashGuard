@@ -20,7 +20,7 @@ class BackgroundService {
         isForegroundMode: true,
         foregroundServiceNotificationId: kForegroundNotificationId,
         initialNotificationTitle: 'CrashGuard Active',
-        initialNotificationContent: 'Monitoring for accidents',
+        initialNotificationContent: 'Monitoring for accidents...',
         notificationChannelId: 'crash_guard_bg',
         foregroundServiceTypes: [AndroidForegroundType.dataSync],
       ),
@@ -127,7 +127,7 @@ Future<void> onStartBackground(ServiceInstance service) async {
     if (service is AndroidServiceInstance) {
       service.setForegroundNotificationInfo(
         title: 'CrashGuard Active',
-        content: 'Monitoring for accidents',
+        content: 'Monitoring for accidents...',
       );
     }
     service.invoke('heartbeat');

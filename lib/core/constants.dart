@@ -50,9 +50,8 @@ const int kForegroundNotificationId = 888;
 /// Alert notification ID.
 const int kAlertNotificationId = 999;
 
-/// Monitoring session persistent notification ID (same as foreground service).
-/// Using the same ID as the foreground service merges them into ONE notification.
-const int kMonitoringNotificationId = kForegroundNotificationId;
+/// Monitoring session persistent notification ID.
+const int kMonitoringNotificationId = 777;
 
 // ─── SharedPreferences Keys (Monitoring) ────────────────────────────────────
 

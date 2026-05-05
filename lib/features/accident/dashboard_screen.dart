@@ -1,12 +1,15 @@
-/// CrashGuard — Dashboard screen (Production UI v3).
+/// CrashGuard — Dashboard screen.
 ///
-/// Compact, information-first layout with:
-///   - AppBar avatar + sign-out menu (replaces full profile card)
-///   - Small status chip (● Active / ● Inactive)
-///   - FAB for stop detection (bottom-right, red, circular)
-///   - Compact secondary test buttons
-///   - Simplified device card with subtle elevation
-///   - Minimal dark theme, no excessive glows
+/// Displays: device status (online/offline), Firebase connection status,
+/// last event info, "Test Accident" button (local + Firebase),
+/// emergency contacts, and navigation to settings.
+///
+/// UI POLISH v2:
+///   - Consistent 16px horizontal padding, 24px vertical spacing
+///   - Cards: elevation 2, border radius 16px
+///   - Online/offline colored dot indicator
+///   - Clean visual hierarchy with generous whitespace
+///   - All text uses theme styles — no hardcoded colors
 library;
 
 import 'dart:async';
@@ -40,30 +43,37 @@ class DashboardScreen extends ConsumerStatefulWidget {
   ConsumerState<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends ConsumerState<DashboardScreen> {
-  Timer? _sessionTimer;
+class _DashboardScreenState extends ConsumerState<DashboardScreen>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulseController;
+  late final Animation<double> _pulseAnimation;
+  late Timer _sessionTimer;
 
   @override
   void initState() {
     super.initState();
-    // Timer to update session duration every second (only rebuilds text)
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat(reverse: true);
+    _pulseAnimation = Tween<double>(begin: 0.95, end: 1.05).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+
+    // Timer to update session duration every second
     _sessionTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() {});
+      if (mounted) {
+        setState(() {});
+      }
     });
   }
 
   @override
   void dispose() {
-    _sessionTimer?.cancel();
-    // FIX: Clear static callbacks to prevent leaked closures
-    // that capture stale widget state / Riverpod ref after navigation.
-    AlertService.onTick = null;
-    AlertService.onTimeout = null;
-    AlertService.onSmsStatus = null;
+    _pulseController.dispose();
+    _sessionTimer.cancel();
     super.dispose();
   }
-
-  // ── Actions ──────────────────────────────────────────────────────────────
 
   /// Simulates an accident detection event via Firebase.
   Future<void> _triggerFirebaseTest() async {
@@ -120,9 +130,11 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   }
 
   /// Starts accident detection monitoring.
+  /// Checks prerequisites and shows dialogs as needed.
   Future<void> _startDetection() async {
     final isPaired = ref.read(isDevicePairedProvider);
-
+    
+    // Check if device is paired
     if (!isPaired) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -136,7 +148,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     }
 
     final contacts = ref.read(contactsProvider);
-
+    
+    // Check if there are emergency contacts
     if (contacts.isEmpty && mounted) {
       final shouldContinue = await showDialog<bool>(
         context: context,
@@ -157,15 +170,16 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           ],
         ),
       );
-
+      
       if (shouldContinue != true) return;
     }
 
+    // Start monitoring
     try {
       await BackgroundService.startDetection();
       ref.read(isMonitoringProvider.notifier).state = true;
       ref.read(monitoringStartTimeProvider.notifier).state = DateTime.now();
-
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -186,10 +200,11 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     }
   }
 
-  /// Stops accident detection monitoring (with confirmation dialog).
+  /// Stops accident detection monitoring.
+  /// Shows confirmation dialog before stopping.
   Future<void> _stopDetection() async {
     if (!mounted) return;
-
+    
     final shouldStop = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -219,7 +234,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       await BackgroundService.stopDetection();
       ref.read(isMonitoringProvider.notifier).state = false;
       ref.read(monitoringStartTimeProvider.notifier).state = null;
-
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -254,44 +269,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     );
   }
 
-  Future<void> _signOut() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Sign Out'),
-        content: const Text('Are you sure you want to sign out?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.error,
-            ),
-            child: const Text('Sign Out'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed == true) {
-      await AuthService.signOut();
-    }
-  }
-
-  // ── Helpers ──────────────────────────────────────────────────────────────
-
-  String _formatDuration(Duration d) {
-    final hours = d.inHours;
-    final minutes = d.inMinutes % 60;
-    final seconds = d.inSeconds % 60;
-    return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-  }
-
-  // ── Build ────────────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
     final status = ref.watch(accidentStatusProvider);
@@ -306,50 +283,37 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     final monitoringDuration = ref.watch(monitoringDurationProvider);
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final user = FirebaseAuth.instance.currentUser;
 
     final isSafe = status == AccidentStatus.safe;
+    final statusColor = isSafe ? kSafeColor : kAlertColor;
+    final statusText = switch (status) {
+      AccidentStatus.safe => 'System Active',
+      AccidentStatus.alertActive => 'Alert Active',
+      AccidentStatus.sending => 'Sending SOS...',
+      AccidentStatus.sent => 'SOS Sent',
+    };
+
+    // Format session duration as HH:MM:SS
+    String formatDuration(Duration d) {
+      final hours = d.inHours;
+      final minutes = d.inMinutes % 60;
+      final seconds = d.inSeconds % 60;
+      return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+    }
 
     return Scaffold(
       appBar: AppBar(
-        leading: Padding(
-          padding: const EdgeInsets.only(left: 12),
-          child: Center(
-            child: _buildUserAvatar(user, colorScheme, theme),
-          ),
-        ),
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.shield_rounded, size: 22, color: colorScheme.primary),
+            Icon(Icons.shield_rounded, size: 24, color: colorScheme.primary),
             const SizedBox(width: 8),
             const Text('CrashGuard'),
           ],
         ),
         actions: [
-          if (user != null)
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert_rounded, size: 22),
-              onSelected: (value) {
-                if (value == 'signout') _signOut();
-              },
-              itemBuilder: (ctx) => [
-                PopupMenuItem(
-                  value: 'signout',
-                  child: Row(
-                    children: [
-                      Icon(Icons.logout_rounded,
-                          size: 18, color: colorScheme.error),
-                      const SizedBox(width: 8),
-                      Text('Sign Out',
-                          style: TextStyle(color: colorScheme.error)),
-                    ],
-                  ),
-                ),
-              ],
-            ),
           IconButton(
-            icon: const Icon(Icons.settings_rounded, size: 22),
+            icon: const Icon(Icons.settings_rounded),
             tooltip: 'Settings',
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const SettingsScreen()),
@@ -357,33 +321,16 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           ),
         ],
       ),
-
-      // ── FAB: Stop Detection (only when monitoring) ───────────────────────
-      floatingActionButton: isMonitoring
-          ? SizedBox(
-              width: 52,
-              height: 52,
-              child: FloatingActionButton(
-                onPressed: _stopDetection,
-                backgroundColor: const Color(0xFFE53935),
-                foregroundColor: Colors.white,
-                elevation: 4,
-                shape: const CircleBorder(),
-                tooltip: 'Stop Detection',
-                child: const Icon(Icons.stop_rounded, size: 26),
-              ),
-            )
-          : null,
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-
-      // ── Body ─────────────────────────────────────────────────────────────
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ── Device / Unpaired Card ──────────────────────────────────
+              // ── User Profile & Logout ───────────────────────────────
+              const _UserProfileCard(),
+              const SizedBox(height: 16),
+
+              // ── Device & Cloud Status ───────────────────────────────
               if (!isPaired)
                 const _UnpairedCard()
               else
@@ -394,104 +341,203 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                   deviceId: deviceId,
                   isMonitoring: isMonitoring,
                 ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 32),
 
-              // ── Status Chip + Session Timer ─────────────────────────────
-              _StatusRow(
-                isMonitoring: isMonitoring,
-                isSafe: isSafe,
-                statusText: switch (status) {
-                  AccidentStatus.safe =>
-                    isMonitoring ? 'Active' : 'Inactive',
-                  AccidentStatus.alertActive => 'Alert Active',
-                  AccidentStatus.sending => 'Sending SOS',
-                  AccidentStatus.sent => 'SOS Sent',
-                },
-                duration: isMonitoring
-                    ? _formatDuration(monitoringDuration)
-                    : null,
-              ),
-              const SizedBox(height: 16),
-
-              // ── Start Detection (only when NOT monitoring) ──────────────
-              if (!isMonitoring) ...[
+              // ── Start/Stop Detection Button ──────────────────────────
+              if (isMonitoring)
+                // STOP button (transparent with red border)
+                Column(
+                  children: [
+                    SizedBox(
+                      width: double.infinity,
+                      height: 64,
+                      child: FilledButton.icon(
+                        onPressed: _stopDetection,
+                        icon: const Icon(Icons.stop_rounded, size: 24),
+                        label: const Text(
+                          'Stop Detection',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.transparent,
+                          foregroundColor: colorScheme.error,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                            side: BorderSide(
+                              color: colorScheme.error,
+                              width: 2,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    // Session timer
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: kSafeColor,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Monitoring for ${formatDuration(monitoringDuration)}',
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                )
+              else
+                // START button (red filled)
                 SizedBox(
                   width: double.infinity,
-                  height: 48,
+                  height: 64,
                   child: FilledButton.icon(
                     onPressed: _startDetection,
-                    icon: const Icon(Icons.play_arrow_rounded, size: 22),
+                    icon: const Icon(Icons.play_arrow_rounded, size: 24),
                     label: const Text(
                       'Start Detection',
                       style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                     style: FilledButton.styleFrom(
-                      backgroundColor: kSafeColor,
+                      backgroundColor: const Color(0xFFE53935),
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
+                        borderRadius: BorderRadius.circular(16),
                       ),
                     ),
                   ),
                 ),
-                const SizedBox(height: 16),
-              ],
+              const SizedBox(height: 32),
 
-              // ── Test Buttons (compact, secondary) ───────────────────────
+              // ── Status Indicator ────────────────────────────────────
+              ScaleTransition(
+                scale: _pulseAnimation,
+                child: Container(
+                  width: 140,
+                  height: 140,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: statusColor.withValues(alpha: 0.12),
+                    border: Border.all(color: statusColor, width: 3),
+                    boxShadow: [
+                      BoxShadow(
+                        color: statusColor.withValues(alpha: 0.25),
+                        blurRadius: 28,
+                        spreadRadius: 4,
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          isSafe
+                              ? Icons.shield_rounded
+                              : Icons.warning_amber_rounded,
+                          size: 40,
+                          color: statusColor,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          statusText,
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            color: statusColor,
+                            fontWeight: FontWeight.w700,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 32),
+
+              // ── Test Buttons (only enabled when monitoring) ─────────
               Row(
                 children: [
                   Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed:
-                          (isMonitoring && isSafe) ? _triggerFirebaseTest : null,
-                      icon:
-                          const Icon(Icons.cloud_upload_rounded, size: 18),
+                    child: FilledButton.icon(
+                      onPressed: (isMonitoring && isSafe) ? _triggerFirebaseTest : null,
+                      icon: const Icon(Icons.cloud_upload_rounded, size: 20),
                       label: const FittedBox(
                         fit: BoxFit.scaleDown,
                         child: Text('Cloud Test'),
                       ),
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size(0, 40),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: colorScheme.error,
+                        foregroundColor: colorScheme.onError,
+                        minimumSize: const Size(0, 52),
                         padding: const EdgeInsets.symmetric(horizontal: 8),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
                       ),
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 12),
                   Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed:
-                          (isMonitoring && isSafe) ? _triggerLocalTest : null,
-                      icon: const Icon(Icons.car_crash_rounded, size: 18),
-                      label: const FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Text('Local Test'),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size(0, 40),
+                    child: FilledButton.tonal(
+                      onPressed: (isMonitoring && isSafe) ? _triggerLocalTest : null,
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size(0, 52),
                         padding: const EdgeInsets.symmetric(horizontal: 8),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.car_crash_rounded, size: 20),
+                            SizedBox(width: 8),
+                            Text('Local Test'),
+                          ],
                         ),
                       ),
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 8),
+              Text(
+                'Only available when monitoring is active',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
 
-              // ── Last Event ──────────────────────────────────────────────
+              // ── Last Event Info ─────────────────────────────────────
               if (lastEvent != null) ...[
                 _LastEventCard(event: lastEvent),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
               ],
 
-              // ── Emergency Contacts ──────────────────────────────────────
+              // ── Emergency Contacts ──────────────────────────────────
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -507,27 +553,23 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                         builder: (_) => const ContactsScreen(),
                       ),
                     ),
-                    icon: const Icon(Icons.edit_rounded, size: 16),
+                    icon: const Icon(Icons.edit_rounded, size: 18),
                     label: const Text('Manage'),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      visualDensity: VisualDensity.compact,
-                    ),
                   ),
                 ],
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 8),
 
               if (contacts.isEmpty)
                 Card(
                   margin: EdgeInsets.zero,
                   child: Padding(
-                    padding: const EdgeInsets.all(20),
+                    padding: const EdgeInsets.all(24),
                     child: Column(
                       children: [
                         Icon(Icons.person_add_rounded,
-                            size: 40, color: colorScheme.onSurfaceVariant),
-                        const SizedBox(height: 10),
+                            size: 48, color: colorScheme.onSurfaceVariant),
+                        const SizedBox(height: 12),
                         Text(
                           'No emergency contacts yet',
                           style: theme.textTheme.titleSmall?.copyWith(
@@ -543,15 +585,12 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           ),
                           textAlign: TextAlign.center,
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 16),
                         FilledButton.tonal(
                           onPressed: () => Navigator.of(context).push(
                             MaterialPageRoute(
                               builder: (_) => const ContactsScreen(),
                             ),
-                          ),
-                          style: FilledButton.styleFrom(
-                            minimumSize: const Size(0, 40),
                           ),
                           child: const Text('Add Contact'),
                         ),
@@ -562,18 +601,15 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               else
                 ...contacts.map(
                   (c) => Card(
-                    margin: const EdgeInsets.only(bottom: 6),
+                    margin: const EdgeInsets.only(bottom: 8),
                     child: ListTile(
-                      dense: true,
                       leading: CircleAvatar(
-                        radius: 18,
                         backgroundColor: colorScheme.primaryContainer,
                         child: Text(
                           c.name.isNotEmpty ? c.name[0].toUpperCase() : '?',
                           style: TextStyle(
                             color: colorScheme.onPrimaryContainer,
                             fontWeight: FontWeight.w600,
-                            fontSize: 14,
                           ),
                         ),
                       ),
@@ -586,174 +622,17 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                         c.phone,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall,
                       ),
                       trailing: Icon(Icons.chevron_right_rounded,
-                          size: 20, color: colorScheme.onSurfaceVariant),
+                          color: colorScheme.onSurfaceVariant),
                     ),
                   ),
                 ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 24),
             ],
           ),
         ),
       ),
-    );
-  }
-
-  /// Builds the small avatar for the AppBar leading slot.
-  Widget _buildUserAvatar(
-      User? user, ColorScheme colorScheme, ThemeData theme) {
-    if (user == null) {
-      return Icon(Icons.account_circle_rounded,
-          size: 32, color: colorScheme.onSurfaceVariant);
-    }
-
-    return GestureDetector(
-      onTap: () {
-        // Show a simple bottom sheet with user info
-        showModalBottomSheet(
-          context: context,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-          ),
-          builder: (ctx) => Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                CircleAvatar(
-                  radius: 32,
-                  backgroundColor: colorScheme.primaryContainer,
-                  backgroundImage: user.photoURL != null
-                      ? NetworkImage(user.photoURL!)
-                      : null,
-                  child: user.photoURL == null
-                      ? Text(
-                          user.displayName?.isNotEmpty == true
-                              ? user.displayName![0].toUpperCase()
-                              : 'U',
-                          style: TextStyle(
-                            fontSize: 24,
-                            color: colorScheme.onPrimaryContainer,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        )
-                      : null,
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  user.displayName ?? 'Unknown User',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  user.email ?? 'No email',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 16),
-              ],
-            ),
-          ),
-        );
-      },
-      child: CircleAvatar(
-        radius: 16,
-        backgroundColor: colorScheme.primaryContainer,
-        backgroundImage:
-            user.photoURL != null ? NetworkImage(user.photoURL!) : null,
-        child: user.photoURL == null
-            ? Text(
-                user.displayName?.isNotEmpty == true
-                    ? user.displayName![0].toUpperCase()
-                    : 'U',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: colorScheme.onPrimaryContainer,
-                  fontWeight: FontWeight.w600,
-                ),
-              )
-            : null,
-      ),
-    );
-  }
-}
-
-// ─── Status Row ───────────────────────────────────────────────────────────────
-
-/// Compact status chip + session timer row.
-class _StatusRow extends StatelessWidget {
-  final bool isMonitoring;
-  final bool isSafe;
-  final String statusText;
-  final String? duration;
-
-  const _StatusRow({
-    required this.isMonitoring,
-    required this.isSafe,
-    required this.statusText,
-    this.duration,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final statusColor = isMonitoring && isSafe
-        ? kSafeColor
-        : (!isSafe ? kAlertColor : theme.colorScheme.onSurfaceVariant);
-
-    return Row(
-      children: [
-        // Status chip
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-          decoration: BoxDecoration(
-            color: statusColor.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 7,
-                height: 7,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: statusColor,
-                ),
-              ),
-              const SizedBox(width: 6),
-              Text(
-                statusText,
-                style: theme.textTheme.labelMedium?.copyWith(
-                  color: statusColor,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        // Session duration (when monitoring)
-        if (duration != null) ...[
-          const SizedBox(width: 10),
-          Icon(Icons.timer_outlined,
-              size: 15, color: theme.colorScheme.onSurfaceVariant),
-          const SizedBox(width: 4),
-          Text(
-            duration!,
-            style: theme.textTheme.labelMedium?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-              fontWeight: FontWeight.w500,
-              fontFeatures: [const FontFeature.tabularFigures()],
-            ),
-          ),
-        ],
-      ],
     );
   }
 }
@@ -773,24 +652,24 @@ class _UnpairedCard extends StatelessWidget {
       margin: EdgeInsets.zero,
       color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(16),
         side: BorderSide(
             color: colorScheme.outlineVariant.withValues(alpha: 0.5)),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         child: Row(
           children: [
             Container(
-              padding: const EdgeInsets.all(10),
+              padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: colorScheme.surfaceContainerHighest,
                 shape: BoxShape.circle,
               ),
               child: Icon(Icons.bluetooth_disabled_rounded,
-                  size: 22, color: colorScheme.onSurfaceVariant),
+                  color: colorScheme.onSurfaceVariant),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 16),
             Expanded(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -798,11 +677,11 @@ class _UnpairedCard extends StatelessWidget {
                 children: [
                   Text(
                     'No Device Paired',
-                    style: theme.textTheme.titleSmall?.copyWith(
+                    style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 4),
                   Text(
                     'Pair your ESP32 device to enable features.',
                     style: theme.textTheme.bodySmall?.copyWith(
@@ -819,8 +698,8 @@ class _UnpairedCard extends StatelessWidget {
               ),
               style: FilledButton.styleFrom(
                 visualDensity: VisualDensity.compact,
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                minimumSize: const Size(0, 36),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                minimumSize: Size.zero,
               ),
               child: const Text('Pair Now'),
             ),
@@ -853,77 +732,96 @@ class _PairedStatusCard extends StatelessWidget {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
+    final isFullyOperational = isConnected && isOnline;
+    final statusColor = isFullyOperational ? kSafeColor : Colors.orange;
+
     return Card(
-      elevation: 1,
+      elevation: 0,
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: BorderSide(
-          color: colorScheme.outlineVariant.withValues(alpha: 0.3),
-        ),
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: statusColor.withValues(alpha: 0.3)),
       ),
+      color: statusColor.withValues(alpha: 0.05),
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Device name row
             Row(
               children: [
-                Icon(Icons.memory_rounded,
-                    color: colorScheme.primary, size: 22),
-                const SizedBox(width: 10),
+                Icon(Icons.memory_rounded, color: statusColor, size: 28),
+                const SizedBox(width: 12),
                 Expanded(
-                  child: Text(
-                    deviceName ?? deviceId ?? 'Unknown Device',
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              deviceName ?? deviceId ?? 'Unknown Device',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (isMonitoring) ...[
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: kSafeColor.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    width: 6,
+                                    height: 6,
+                                    decoration: const BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: kSafeColor,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    'Live',
+                                    style: theme.textTheme.labelSmall?.copyWith(
+                                      color: kSafeColor,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Paired device',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                // Live chip (when monitoring)
-                if (isMonitoring)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 3,
-                    ),
-                    decoration: BoxDecoration(
-                      color: kSafeColor.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 6,
-                          height: 6,
-                          decoration: const BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: kSafeColor,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Live',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: kSafeColor,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
               ],
             ),
-            const SizedBox(height: 10),
-            // Status chips row
+            const SizedBox(height: 16),
             Row(
               children: [
                 Expanded(
-                  child: _MiniStatusChip(
+                  child: _StatusChip(
                     icon: isConnected
                         ? Icons.cloud_done_rounded
                         : Icons.cloud_off_rounded,
@@ -933,7 +831,7 @@ class _PairedStatusCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: _MiniStatusChip(
+                  child: _StatusChip(
                     icon: isOnline
                         ? Icons.wifi_rounded
                         : Icons.wifi_off_rounded,
@@ -950,13 +848,13 @@ class _PairedStatusCard extends StatelessWidget {
   }
 }
 
-/// Small colored status chip for the device card.
-class _MiniStatusChip extends StatelessWidget {
+/// Colored dot + icon + label chip for status indicators.
+class _StatusChip extends StatelessWidget {
   final IconData icon;
   final String label;
   final bool isOk;
 
-  const _MiniStatusChip({
+  const _StatusChip({
     required this.icon,
     required this.label,
     required this.isOk,
@@ -968,24 +866,25 @@ class _MiniStatusChip extends StatelessWidget {
     final color = isOk ? kSafeColor : Colors.orange;
 
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(8),
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
+          // Colored dot indicator
           Container(
-            width: 6,
-            height: 6,
+            width: 8,
+            height: 8,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: color,
             ),
           ),
-          const SizedBox(width: 5),
-          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 6),
+          Icon(icon, size: 16, color: color),
           const SizedBox(width: 4),
           Flexible(
             child: Text(
@@ -1035,15 +934,15 @@ class _LastEventCard extends StatelessWidget {
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
                 Icon(Icons.history_rounded,
-                    size: 16, color: colorScheme.onSurfaceVariant),
-                const SizedBox(width: 6),
+                    size: 18, color: colorScheme.onSurfaceVariant),
+                const SizedBox(width: 8),
                 Text(
                   'Last Event',
                   style: theme.textTheme.titleSmall?.copyWith(
@@ -1056,9 +955,9 @@ class _LastEventCard extends StatelessWidget {
                       horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
                     color: event.status == kStatusHandled
-                        ? kSafeColor.withValues(alpha: 0.12)
-                        : kAlertColor.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(6),
+                        ? kSafeColor.withValues(alpha: 0.15)
+                        : kAlertColor.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
                     event.status,
@@ -1072,12 +971,12 @@ class _LastEventCard extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             _infoRow(Icons.access_time_rounded, 'Time', timeAgo),
-            const SizedBox(height: 4),
+            const SizedBox(height: 6),
             _infoRow(Icons.memory_rounded, 'Device', event.deviceId),
             if (event.hasValidLocation) ...[
-              const SizedBox(height: 4),
+              const SizedBox(height: 6),
               _infoRow(
                 Icons.location_on_rounded,
                 'Location',
@@ -1095,8 +994,8 @@ class _LastEventCard extends StatelessWidget {
       final theme = Theme.of(context);
       return Row(
         children: [
-          Icon(icon, size: 13, color: theme.colorScheme.onSurfaceVariant),
-          const SizedBox(width: 5),
+          Icon(icon, size: 14, color: theme.colorScheme.onSurfaceVariant),
+          const SizedBox(width: 6),
           Text(
             '$label: ',
             style: theme.textTheme.bodySmall?.copyWith(
@@ -1115,5 +1014,122 @@ class _LastEventCard extends StatelessWidget {
         ],
       );
     });
+  }
+}
+
+// ─── User Profile Card ──────────────────────────────────────────────────────
+
+class _UserProfileCard extends StatelessWidget {
+  const _UserProfileCard();
+
+  Future<void> _signOut(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sign Out'),
+        content: const Text('Are you sure you want to sign out?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: const Text('Sign Out'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await AuthService.signOut();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    if (user == null) return const SizedBox.shrink();
+
+    return Card(
+      elevation: 0,
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+            color: colorScheme.outlineVariant.withValues(alpha: 0.5)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 20,
+              backgroundColor: colorScheme.primaryContainer,
+              backgroundImage: user.photoURL != null
+                  ? NetworkImage(user.photoURL!)
+                  : null,
+              child: user.photoURL == null
+                  ? Text(
+                      user.displayName?.isNotEmpty == true
+                          ? user.displayName![0].toUpperCase()
+                          : 'U',
+                      style: TextStyle(
+                        color: colorScheme.onPrimaryContainer,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    )
+                  : null,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    user.displayName ?? 'Unknown User',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                  Text(
+                    user.email ?? 'No email',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                      fontSize: 11,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            TextButton.icon(
+              onPressed: () => _signOut(context),
+              icon: const Icon(Icons.logout_rounded, size: 18),
+              label: const Text('Sign Out'),
+              style: TextButton.styleFrom(
+                foregroundColor: colorScheme.error,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

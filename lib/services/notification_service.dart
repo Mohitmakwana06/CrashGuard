@@ -26,7 +26,7 @@ import '../models/accident_event.dart';
 @pragma('vm:entry-point')
 void onMonitoringNotificationResponse(NotificationResponse response) {
   print('[NotificationService] Monitoring action: ${response.actionId}');
-  if (response.actionId == 'stop') {
+  if (response.actionId == 'stop_detection') {
     // Save state that monitoring should be stopped
     _handleStopDetectionFromBackground();
   }
@@ -149,16 +149,14 @@ print('[NotificationService] Notification channels created');
     print('[NotificationService] Alert notification cancelled');
   }
 
-  /// Shows a persistent monitoring notification with a "STOP" action button.
+  /// Shows a persistent monitoring notification with a "Stop Detection" action button.
   ///
   /// This notification:
-  ///   - Uses the foreground service notification ID (merges with bg service)
-  ///   - Title: "CrashGuard Active"
-  ///   - Body: "Monitoring for accidents"
-  ///   - Has one action button: "STOP"
+  ///   - Uses the low-importance background channel (no sound)
+  ///   - Has one action button: "Stop Detection"
   ///   - Is ongoing (user cannot swipe it away)
   ///   - Tapping the body opens the app
-  ///   - Tapping STOP stops the service without opening app
+  ///   - Tapping the action button stops the service without opening app
   static Future<void> showMonitoringNotification() async {
     final androidDetails = AndroidNotificationDetails(
       'crash_guard_bg',
@@ -172,8 +170,8 @@ print('[NotificationService] Notification channels created');
       enableVibration: false,
       actions: [
         const AndroidNotificationAction(
-          'stop',
-          'STOP',
+          'stop_detection',
+          'Stop Detection',
           showsUserInterface: false,
         ),
       ],
@@ -184,7 +182,7 @@ print('[NotificationService] Notification channels created');
     await _plugin.show(
       kMonitoringNotificationId,
       'CrashGuard Active',
-      'Monitoring for accidents',
+      'Monitoring for accidents · Tap to open',
       details,
       payload: 'monitoring',
     );
