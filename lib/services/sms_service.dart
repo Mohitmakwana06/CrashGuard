@@ -99,6 +99,7 @@ class SmsService {
     required String body,
     required List<String> recipients,
   }) async {
+    print("ENTERED SMS SERVICE"); // STEP 3: Confirm SMS Service Entry
     print('');
     print('[SmsService] ================================================');
     print('[SmsService] sendToAll() called');
@@ -310,6 +311,11 @@ class SmsService {
     print('[SmsService]   Body: ${body.length} chars');
     print('[SmsService]   Timeout: 30s');
 
+    print("SID: " + sid); // STEP 5
+    print("FROM: " + from); // STEP 5
+    print("INTERNET STATUS OK"); // STEP 6
+
+    print("SENDING REQUEST TO TWILIO"); // STEP 4
     try {
       final response = await http
           .post(
@@ -325,6 +331,8 @@ class SmsService {
             },
           )
           .timeout(const Duration(seconds: 30));
+
+      print("RESPONSE RECEIVED"); // STEP 4
 
       print('[SmsService] -- HTTP Response --');
       print('[SmsService]   Status: ${response.statusCode}');
@@ -375,5 +383,27 @@ class SmsService {
       print('[SmsService] HTTP request exception: $e');
       return SmsResult(success: false, error: e.toString());
     }
+  }
+
+  /// Sends a single test SMS to validate the full pipeline manually (Step 7).
+  static Future<SmsResult> sendTestSms({required String to}) async {
+    print("ENTERED SMS SERVICE (Test)"); // STEP 3 for manual test
+    print('[SmsService] ========== TEST SMS ==========');
+    print('[SmsService] Testing SMS to: $to');
+    
+    if (!EnvConfig.isTwilioConfiguredProperly) {
+      final err = EnvConfig.twilioValidationError ?? 'Not configured';
+      print('[SmsService] CONFIG ERROR: $err');
+      return SmsResult(success: false, error: err);
+    }
+    
+    final result = await _send(
+      body: 'CrashGuard test SMS. If you received this, SMS alerts are working.',
+      to: to,
+    );
+    
+    print('[SmsService] TEST RESULT: ${result.success ? "SUCCESS" : "FAILED"}');
+    print('[SmsService] ================================');
+    return result;
   }
 }

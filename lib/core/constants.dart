@@ -50,6 +50,18 @@ const int kForegroundNotificationId = 888;
 /// Alert notification ID.
 const int kAlertNotificationId = 999;
 
+/// Monitoring session persistent notification ID (same as foreground service).
+/// Using the same ID as the foreground service merges them into ONE notification.
+const int kMonitoringNotificationId = kForegroundNotificationId;
+
+// ─── SharedPreferences Keys (Monitoring) ────────────────────────────────────
+
+/// Whether monitoring session is active (persisted across app launches).
+const String kPrefIsMonitoringActive = 'is_monitoring_active';
+
+/// Timestamp (milliseconds) when current monitoring session started.
+const String kPrefMonitoringStartMs = 'monitoring_start_ms';
+
 // ─── Firebase Realtime Database ──────────────────────────────────────────────
 
 /// Root path for accident events: accidents/{device_id}/{timestamp}

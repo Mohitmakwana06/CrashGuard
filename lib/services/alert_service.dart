@@ -71,6 +71,8 @@ class AlertService {
   /// If [event] is provided (from Firebase), its coordinates are used
   /// as a FALLBACK for the emergency SMS. Phone GPS is always tried first.
   static Future<void> trigger({AccidentEvent? event}) async {
+    print("ALERT TRIGGERED"); // STEP 1: Confirm Trigger Execution
+    
     if (isActive) {
       print('[AlertService] Alert already active -- ignoring duplicate trigger');
       return; // Prevent double-trigger.
@@ -311,6 +313,7 @@ class AlertService {
     try {
       _emitSmsStatus('Sending emergency SMS to ${phones.length} contact(s)...');
 
+      print("CALLING SMS SERVICE"); // STEP 2: Confirm SMS Function Call
       final results = await SmsService.sendToAll(body: body, recipients: phones);
 
       int successCount = 0;

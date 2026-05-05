@@ -4,20 +4,18 @@
 /// from the user, sends them to the device, and waits for a response.
 /// On success, links the device in Firebase and navigates to the dashboard.
 ///
-/// PRODUCTION-GRADE v2 — Key improvements:
-///   1. Calls BleService.fullReset() at the start of every attempt
-///   2. "Try Again" button on every failure state
-///   3. Dedicated UI panels for every provisioning state
-///   4. WiFi-awaiting panel with 30s countdown
-///   5. Verifying panel with heartbeat countdown
-///   6. Parses "OK:{device_name}" response for correct device ID
-///   7. Properly cancels operations in dispose()
-///   8. Real-time BLE message stream display
+/// CHANGED (v3): Replaced BLE notify waiting with Firebase RTDB polling.
+///   - After writing credentials, BLE is disconnected immediately.
+///   - Polls devices/{deviceId}/status every 1s for up to 30s.
+///   - Uses .get() polling, NOT .onValue stream listener.
+///   - Cancels polling cleanly on dispose via mounted check.
+///   - Firebase poll exceptions are caught and retried on next tick.
 library;
 
 import 'dart:async';
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -54,6 +52,9 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen>
 
   /// Whether an active provisioning future is running (to avoid double-tap).
   bool _provisioningInProgress = false;
+
+  // CHANGED: Tracks seconds remaining for Firebase polling countdown.
+  int _pollSecondsRemaining = 30;
 
   late final AnimationController _pulseController;
   late final Animation<double> _pulseAnimation;
@@ -100,7 +101,7 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen>
   }
 
   // ---------------------------------------------------------------------------
-  // Provisioning
+  // Provisioning — CHANGED: uses writeCredentialsOnly + Firebase polling
   // ---------------------------------------------------------------------------
 
   Future<void> _startProvisioning() async {
@@ -119,40 +120,121 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen>
       _isProvisioning = true;
       _errorMessage = null;
       _lastBleMessage = null;
+      _pollSecondsRemaining = 30; // CHANGED: reset countdown
     });
 
     // ── CRITICAL: Full reset before every attempt ──
     await BleService.fullReset();
 
-    final result = await BleService.provisionDevice(
+    // ── CHANGED: Write credentials only — do NOT wait for BLE notify ──
+    final result = await BleService.writeCredentialsOnly(
       device: widget.device,
       ssid: _ssidController.text.trim(),
       password: _passwordController.text,
       userId: userId,
     );
 
-    _provisioningInProgress = false;
+    if (!mounted) {
+      _provisioningInProgress = false;
+      return;
+    }
 
-    if (!mounted) return;
-
-    if (result.success) {
-      await _handleSuccess(result, userId);
-    } else {
+    if (!result.success) {
+      // BLE write itself failed (could not connect, service not found, etc.)
+      _provisioningInProgress = false;
       setState(() {
         _isProvisioning = false;
         _errorMessage = result.error ?? 'Provisioning failed';
       });
       await BleService.disconnect();
+      return;
+    }
+
+    // ── CHANGED: Immediately disconnect BLE — do not wait for notify ──
+    try {
+      await BleService.disconnect();
+    } catch (_) {}
+
+    // ── CHANGED: Start Firebase RTDB polling (1s interval, 30s timeout) ──
+    final deviceId = result.deviceName ?? widget.device.platformName;
+    setState(() {
+      _lastBleMessage = 'Connecting to WiFi...';
+    });
+
+    final online = await _pollFirebaseStatus(deviceId);
+
+    _provisioningInProgress = false;
+    if (!mounted) return;
+
+    if (online) {
+      await _handleSuccess(deviceId, userId);
+    } else {
+      // CHANGED: Timeout — show user-friendly error with retry
+      setState(() {
+        _isProvisioning = false;
+        _errorMessage =
+            'Could not connect. Please check your WiFi credentials and try again.';
+        _state = BleProvisioningState.failed;
+      });
     }
   }
 
-  Future<void> _handleSuccess(BleProvisioningResult result, String userId) async {
-    // Determine device ID and name from the response
-    final deviceName = result.deviceName ?? widget.device.platformName;
-    final deviceId = result.deviceName ??
-        (widget.device.platformName.isNotEmpty
-            ? widget.device.platformName
-            : widget.device.remoteId.str);
+  // ---------------------------------------------------------------------------
+  // CHANGED: Firebase RTDB polling — 1s interval, 30s max, .get() only
+  // ---------------------------------------------------------------------------
+
+  /// Polls `devices/{deviceId}/status` every 1 second for up to 30 seconds.
+  ///
+  /// Returns `true` if status == "online" is detected, `false` on timeout.
+  /// - Uses [FirebaseDatabase.instance.ref().get()] — NOT .onValue stream.
+  /// - Cancels cleanly if widget is disposed mid-poll via [mounted] check.
+  /// - Firebase exceptions are caught gracefully; polling continues.
+  Future<bool> _pollFirebaseStatus(String deviceId) async {
+    const maxSeconds = 30;
+    final ref = FirebaseDatabase.instance.ref('devices/$deviceId/status');
+
+    for (var elapsed = 0; elapsed < maxSeconds; elapsed++) {
+      // CHANGED: Clean cancellation if widget disposed mid-poll
+      if (!mounted) return false;
+
+      setState(() {
+        _pollSecondsRemaining = maxSeconds - elapsed;
+        _lastBleMessage =
+            'Connecting to WiFi... (${_pollSecondsRemaining}s remaining)';
+      });
+
+      try {
+        final snapshot = await ref.get();
+        if (snapshot.exists && snapshot.value == 'online') {
+          return true;
+        }
+      } catch (e) {
+        // CHANGED: Firebase exception — log and continue to next iteration
+        debugPrint('[Pairing] Firebase poll error (will retry): $e');
+      }
+
+      // Wait 1 second before next poll
+      await Future.delayed(const Duration(seconds: 1));
+    }
+
+    // Final check after loop
+    if (!mounted) return false;
+    try {
+      final snapshot = await ref.get();
+      if (snapshot.exists && snapshot.value == 'online') {
+        return true;
+      }
+    } catch (_) {}
+
+    return false;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Success handler (unchanged logic, simplified signature)
+  // ---------------------------------------------------------------------------
+
+  Future<void> _handleSuccess(String deviceId, String userId) async {
+    final deviceName = deviceId;
 
     // Save to SharedPreferences via EnvConfig
     try {
@@ -179,11 +261,6 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen>
     ref.read(pairedDeviceIdProvider.notifier).state = deviceId;
     ref.read(pairedDeviceNameProvider.notifier).state = deviceName;
 
-    // Disconnect BLE
-    try {
-      await BleService.disconnect();
-    } catch (_) {}
-
     // Navigate to home
     if (mounted) {
       Navigator.of(context).popUntil((route) => route.isFirst);
@@ -200,6 +277,7 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen>
         _lastBleMessage = null;
         _state = BleProvisioningState.idle;
         _provisioningInProgress = false;
+        _pollSecondsRemaining = 30;
       });
     }
   }
@@ -506,12 +584,13 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen>
                 ),
               ],
 
-              // ── WiFi Awaiting Panel ─────────────────────────────
+              // ── CHANGED: WiFi Polling Panel (replaces old BLE notify wait) ──
               if (isAwaitingWifi || isVerifying) ...[
                 const SizedBox(height: 24),
                 _WifiVerifyPanel(
                   message: _lastBleMessage,
                   isVerifying: isVerifying,
+                  secondsRemaining: _pollSecondsRemaining,
                 ),
               ],
 
@@ -551,47 +630,24 @@ class _BlePairingScreenState extends ConsumerState<BlePairingScreen>
 
 /// Dedicated panel shown during `provisionedAwaitingWifi` and `verifying` states.
 ///
-/// Shows:
-///   - WiFi icon with subtle glow
-///   - Explanatory text for the user
-///   - 30-second animated countdown bar
-///   - Real-time message from BLE service (e.g. "24s remaining")
-class _WifiVerifyPanel extends StatefulWidget {
+/// CHANGED: Now receives secondsRemaining from the parent's polling loop
+/// instead of running its own internal 30s animation timer.
+class _WifiVerifyPanel extends StatelessWidget {
   final String? message;
   final bool isVerifying;
+  final int secondsRemaining;
 
   const _WifiVerifyPanel({
     this.message,
     this.isVerifying = false,
+    this.secondsRemaining = 30,
   });
-
-  @override
-  State<_WifiVerifyPanel> createState() => _WifiVerifyPanelState();
-}
-
-class _WifiVerifyPanelState extends State<_WifiVerifyPanel>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _progressController;
-
-  @override
-  void initState() {
-    super.initState();
-    _progressController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 30),
-    )..forward();
-  }
-
-  @override
-  void dispose() {
-    _progressController.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
+    final progress = 1.0 - (secondsRemaining / 30.0);
 
     return Card(
       elevation: 2,
@@ -609,7 +665,7 @@ class _WifiVerifyPanelState extends State<_WifiVerifyPanel>
                 color: Colors.orange.withValues(alpha: 0.12),
               ),
               child: Icon(
-                widget.isVerifying
+                isVerifying
                     ? Icons.cloud_sync_rounded
                     : Icons.wifi_rounded,
                 size: 32,
@@ -619,7 +675,7 @@ class _WifiVerifyPanelState extends State<_WifiVerifyPanel>
             const SizedBox(height: 16),
 
             Text(
-              widget.isVerifying
+              isVerifying
                   ? 'Verifying Connection…'
                   : 'Connecting to WiFi…',
               style: textTheme.titleMedium?.copyWith(
@@ -629,7 +685,7 @@ class _WifiVerifyPanelState extends State<_WifiVerifyPanel>
             const SizedBox(height: 8),
 
             Text(
-              widget.isVerifying
+              isVerifying
                   ? 'Waiting for your device to send its first heartbeat to Firebase.'
                   : 'Credentials sent successfully! Your device is now '
                       'switching from Bluetooth to WiFi. This is normal.',
@@ -640,40 +696,33 @@ class _WifiVerifyPanelState extends State<_WifiVerifyPanel>
             ),
             const SizedBox(height: 20),
 
-            // Animated progress bar (30 seconds)
-            AnimatedBuilder(
-              animation: _progressController,
-              builder: (context, _) {
-                final remaining =
-                    30 - (30 * _progressController.value).round();
-                return Column(
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: _progressController.value,
-                        minHeight: 6,
-                        backgroundColor: colorScheme.surfaceContainerHighest,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          _progressController.value > 0.8
-                              ? Colors.red.shade400
-                              : Colors.orange,
-                        ),
-                      ),
+            // CHANGED: Progress bar driven by parent polling countdown
+            Column(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: progress.clamp(0.0, 1.0),
+                    minHeight: 6,
+                    backgroundColor: colorScheme.surfaceContainerHighest,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      progress > 0.8
+                          ? Colors.red.shade400
+                          : Colors.orange,
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      widget.message ??
-                          'Waiting for device heartbeat (${remaining}s remaining)...',
-                      style: textTheme.bodySmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                        fontFeatures: const [FontFeature.tabularFigures()],
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                );
-              },
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  message ??
+                      'Waiting for device (${secondsRemaining}s remaining)...',
+                  style: textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
             ),
           ],
         ),

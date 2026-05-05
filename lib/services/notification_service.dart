@@ -16,9 +16,34 @@ library;
 import 'dart:convert';
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/constants.dart';
 import '../models/accident_event.dart';
+
+/// Callback invoked when the user taps the "Stop Detection" action button
+/// on the monitoring notification. Called even when app is dead.
+@pragma('vm:entry-point')
+void onMonitoringNotificationResponse(NotificationResponse response) {
+  print('[NotificationService] Monitoring action: ${response.actionId}');
+  if (response.actionId == 'stop') {
+    // Save state that monitoring should be stopped
+    _handleStopDetectionFromBackground();
+  }
+}
+
+/// Handles the Stop Detection action when tapped from background.
+Future<void> _handleStopDetectionFromBackground() async {
+  try {
+    // Clear monitoring session from SharedPreferences
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(kPrefIsMonitoringActive);
+    await prefs.remove(kPrefMonitoringStartMs);
+    print('[NotificationService] Monitoring session cleared from background');
+  } catch (e) {
+    print('[NotificationService] Error clearing monitoring session: $e');
+  }
+}
 
 /// Callback invoked when the user taps the notification while app is dead.
 /// The response is stored and handled on next app launch via
@@ -49,7 +74,7 @@ class NotificationService {
     await _plugin.initialize(
       initSettings,
       onDidReceiveNotificationResponse: _handleNotificationTap,
-      onDidReceiveBackgroundNotificationResponse: notificationTapBackground,
+      onDidReceiveBackgroundNotificationResponse: onMonitoringNotificationResponse,
     );
 
     // Create the high-priority channel for accident alerts.
@@ -122,6 +147,54 @@ print('[NotificationService] Notification channels created');
   static Future<void> cancelAlertNotification() async {
     await _plugin.cancel(kAlertNotificationId);
     print('[NotificationService] Alert notification cancelled');
+  }
+
+  /// Shows a persistent monitoring notification with a "STOP" action button.
+  ///
+  /// This notification:
+  ///   - Uses the foreground service notification ID (merges with bg service)
+  ///   - Title: "CrashGuard Active"
+  ///   - Body: "Monitoring for accidents"
+  ///   - Has one action button: "STOP"
+  ///   - Is ongoing (user cannot swipe it away)
+  ///   - Tapping the body opens the app
+  ///   - Tapping STOP stops the service without opening app
+  static Future<void> showMonitoringNotification() async {
+    final androidDetails = AndroidNotificationDetails(
+      'crash_guard_bg',
+      'CrashGuard Background',
+      channelDescription: 'Keeps CrashGuard running in the background',
+      importance: Importance.low,
+      priority: Priority.low,
+      ongoing: true,
+      autoCancel: false,
+      playSound: false,
+      enableVibration: false,
+      actions: [
+        const AndroidNotificationAction(
+          'stop',
+          'STOP',
+          showsUserInterface: false,
+        ),
+      ],
+    );
+
+    final details = NotificationDetails(android: androidDetails);
+
+    await _plugin.show(
+      kMonitoringNotificationId,
+      'CrashGuard Active',
+      'Monitoring for accidents',
+      details,
+      payload: 'monitoring',
+    );
+    print('[NotificationService] Monitoring notification shown');
+  }
+
+  /// Cancels the persistent monitoring notification.
+  static Future<void> cancelMonitoringNotification() async {
+    await _plugin.cancel(kMonitoringNotificationId);
+    print('[NotificationService] Monitoring notification cancelled');
   }
 
   /// Checks if the app was launched from an accident notification.

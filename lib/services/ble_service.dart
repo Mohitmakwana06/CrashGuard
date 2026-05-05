@@ -157,7 +157,6 @@ class BleService {
     _emitMessage('Scanning for CrashGuard device...');
 
     FlutterBluePlus.startScan(
-      withServices: [Guid(kBleServiceUuid)],
       timeout: kBleScanTimeout,
       androidUsesFineLocation: false,
     );
@@ -173,7 +172,9 @@ class BleService {
       return results.where((r) {
         final name = r.device.platformName;
         final hasService = r.advertisementData.serviceUuids.contains(Guid(kBleServiceUuid));
-        return hasService || name == 'CrashGuard_ESP32';
+        // FIX: Use startsWith instead of exact match — some Android phones
+        // truncate the BLE name in the advertisement packet.
+        return hasService || name.startsWith('CrashGuard');
       }).toList();
     });
   }
@@ -284,6 +285,110 @@ class BleService {
       _emitMessage(errText);
       dev.log('[BleService] ❌ Provisioning error (credentialsSent=$_credentialsSent): $e');
       
+      return BleProvisioningResult(success: false, error: errText);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // CHANGED: New write-only method — does NOT wait for BLE notify response.
+  // The pairing screen calls this, then polls Firebase directly.
+  // ---------------------------------------------------------------------------
+
+  /// Writes WiFi credentials to the ESP32 via BLE but does NOT wait for a
+  /// BLE notify/read response. Returns immediately after a successful write.
+  ///
+  /// This is the recommended path because the ESP32 disconnects BLE before
+  /// connecting to WiFi, so the notify response never arrives.
+  ///
+  /// The caller (pairing screen) is responsible for:
+  ///   1. Disconnecting BLE after this returns
+  ///   2. Polling Firebase for the device's "online" status
+  static Future<BleProvisioningResult> writeCredentialsOnly({
+    required BluetoothDevice device,
+    required String ssid,
+    required String password,
+    required String userId,
+  }) async {
+    final fallbackDeviceId = device.platformName.isNotEmpty
+        ? device.platformName
+        : device.remoteId.str;
+
+    _credentialsSent = false;
+
+    try {
+      // 1. Connect
+      _emitMessage('Connecting to device...');
+      await _connectToDevice(device);
+
+      // 2. Discover services
+      _emitMessage('Discovering services...');
+      final services = await _discoverServices(device);
+
+      // 3. Find our characteristic
+      _emitMessage('Checking compatibility...');
+      final characteristic = _findCharacteristic(services);
+
+      // 4. Send credentials
+      _setState(BleProvisioningState.sendingCredentials);
+      _emitMessage('Sending WiFi credentials...');
+      dev.log('[BleService] writeCredentialsOnly: Sending WiFi credentials...');
+
+      final payload = jsonEncode({
+        "ssid": ssid,
+        "pass": password,
+        "uid": userId,
+      });
+
+      final bool writeNoResp = characteristic.properties.writeWithoutResponse;
+
+      try {
+        await characteristic.write(
+          utf8.encode(payload),
+          withoutResponse: writeNoResp,
+        );
+      } catch (e) {
+        if (e.toString().contains('fbp-code:1') ||
+            e.toString().contains('Timeout')) {
+          dev.log('[BleService] Write timed out but ESP32 likely received it.');
+          _emitMessage('Credentials sent (device processing...)');
+        } else {
+          rethrow;
+        }
+      }
+
+      // ── Mark credentials as sent ──
+      _credentialsSent = true;
+      dev.log('[BleService] ✅ writeCredentialsOnly: _credentialsSent = true');
+
+      // CHANGED: Do NOT wait for BLE notify — return immediately.
+      // The screen will disconnect BLE and start Firebase polling.
+      _setState(BleProvisioningState.provisionedAwaitingWifi);
+      _emitMessage('Credentials sent! Device is connecting to WiFi...');
+
+      return BleProvisioningResult(
+        success: true,
+        deviceName: fallbackDeviceId,
+      );
+    } catch (e) {
+      // If BLE disconnected AFTER credentials were sent, still treat as success
+      // because the ESP32 likely received them and is switching to WiFi.
+      if (_credentialsSent && _isDisconnectError(e)) {
+        dev.log('[BleService] ✅ writeCredentialsOnly: BLE disconnected after '
+            'send — treating as success');
+        _setState(BleProvisioningState.provisionedAwaitingWifi);
+        _emitMessage('Credentials sent! Device is connecting to WiFi...');
+        return BleProvisioningResult(
+          success: true,
+          deviceName: fallbackDeviceId,
+        );
+      }
+
+      // Real error — credentials were NOT sent.
+      _setState(BleProvisioningState.failed);
+      final errText = _mapExceptionToUserMessage(e);
+      _emitMessage(errText);
+      dev.log('[BleService] ❌ writeCredentialsOnly error '
+          '(credentialsSent=$_credentialsSent): $e');
       return BleProvisioningResult(success: false, error: errText);
     }
   }
@@ -543,11 +648,12 @@ class BleService {
     if (r.contains('WIFI_TIMEOUT') || r.contains('TIMEOUT')) {
       return 'Connection timed out. Move device closer to router.';
     }
-    if (r.contains('JSON') || r.contains('PARSE')) {
+    // FIX: Handle both specific and generic error codes from firmware
+    if (r.contains('JSON') || r.contains('PARSE') || r.contains('INVALID')) {
       return 'Data error. Please try again.';
     }
     if (r.contains('MISSING_FIELDS')) {
-      return 'Data error. Please try again.';
+      return 'Incomplete data sent to device. Please try again.';
     }
     if (reason.isNotEmpty) {
       return 'Device error: $reason';
@@ -592,6 +698,9 @@ class BleService {
     try {
       await device.disconnect();
     } catch (_) {}
+    // FIX: Wait for GATT resources to be fully released before reconnecting.
+    // Without this delay, some Android phones get GATT error 133.
+    await Future.delayed(const Duration(milliseconds: 300));
 
     await device.connect(
       timeout: const Duration(seconds: 15),

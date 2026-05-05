@@ -19,6 +19,7 @@ import '../../core/theme_provider.dart';
 import '../../services/auth_service.dart';
 import '../../services/device_service.dart';
 import '../../services/firebase_service.dart';
+import '../../services/sms_service.dart';
 import '../ble/ble_provider.dart';
 import '../ble/ble_scan_screen.dart';
 import '../contacts/contacts_screen.dart';
@@ -115,6 +116,53 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     await FirebaseService.stopListening();
     await DeviceService.stopListening();
     await AuthService.signOut();
+  }
+
+  Future<void> _showTestSmsDialog(BuildContext context) async {
+    final phoneController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Test SMS (Step 7)'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Enter a verified phone number:'),
+            const SizedBox(height: 8),
+            TextField(
+              controller: phoneController,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(
+                hintText: '+919876543210',
+                prefixIcon: Icon(Icons.phone_rounded),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () async {
+              final to = phoneController.text.trim();
+              Navigator.pop(ctx);
+              if (to.isNotEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sending Test SMS... check console logs.')));
+                final result = await SmsService.sendTestSms(to: to);
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(result.success ? 'Test SMS Sent!' : 'Failed: ${result.error}'),
+                      duration: const Duration(seconds: 4),
+                    ),
+                  );
+                }
+              }
+            },
+            child: const Text('Send'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -264,6 +312,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const ContactsScreen()),
             ),
+          ),
+          _SettingsTile(
+            icon: Icons.bug_report_rounded,
+            title: 'Test SMS Pipeline (Step 7)',
+            subtitle: 'Manually trigger Twilio API to verify network/config',
+            onTap: () => _showTestSmsDialog(context),
           ),
 
           const SizedBox(height: 8),

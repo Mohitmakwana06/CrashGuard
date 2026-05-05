@@ -29,6 +29,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'core/app_theme.dart';
 import 'core/constants.dart';
@@ -37,6 +38,7 @@ import 'core/error_provider.dart';
 import 'core/theme_provider.dart';
 import 'features/accident/accident_provider.dart';
 import 'features/accident/dashboard_screen.dart';
+import 'features/accident/monitoring_provider.dart';
 import 'features/alert/alert_provider.dart';
 import 'features/alert/alert_screen.dart';
 import 'features/auth/auth_provider.dart';
@@ -262,18 +264,13 @@ Future<void> _initDelayedServices() async {
         '(user=${currentUser != null}, paired=$isPaired)');
   }
 
-  // ── Start Background Service (Delayed by 3 seconds) ────────────────────
-  Future.delayed(const Duration(seconds: 3), () async {
-    try {
-      await BackgroundService.initialize();
-      print('[main] Background service started');
-    } catch (e) {
-      print('[main] Background service failed: $e');
-    }
-  });
+  // NOTE: Background service is NOT started here.
+  // It only starts via BackgroundService.startDetection() when user manually
+  // taps "Start Detection" or when a previous monitoring session is restored.
 }
 
 /// Loads persisted device info from SharedPreferences into Riverpod providers.
+/// Also restores any active monitoring session from a previous app launch.
 Future<void> _loadPersistedDeviceInfo() async {
   final isPaired = await EnvConfig.isDevicePaired();
   final deviceId = await EnvConfig.getLinkedDeviceId();
@@ -285,6 +282,36 @@ Future<void> _loadPersistedDeviceInfo() async {
   if (isPaired) {
     _container.read(pairedDeviceIdProvider.notifier).state = deviceId;
     _container.read(pairedDeviceNameProvider.notifier).state = deviceName;
+  }
+
+  // ── Restore monitoring session if active ────────────────────────────
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final isMonitoringActive = prefs.getBool(kPrefIsMonitoringActive) ?? false;
+    
+    if (isMonitoringActive) {
+      final startMs = prefs.getInt(kPrefMonitoringStartMs);
+      if (startMs != null) {
+        final startTime = DateTime.fromMillisecondsSinceEpoch(startMs);
+        _container.read(isMonitoringProvider.notifier).state = true;
+        _container.read(monitoringStartTimeProvider.notifier).state = startTime;
+        
+        // Restart the background service and show notification
+        try {
+          await BackgroundService.startDetection();
+          print('[main] Monitoring session restored from previous launch');
+        } catch (e) {
+          print('[main] Error restoring monitoring session: $e');
+          // Clear state if restoration failed
+          _container.read(isMonitoringProvider.notifier).state = false;
+          _container.read(monitoringStartTimeProvider.notifier).state = null;
+          await prefs.remove(kPrefIsMonitoringActive);
+          await prefs.remove(kPrefMonitoringStartMs);
+        }
+      }
+    }
+  } catch (e) {
+    print('[main] Error checking monitoring session: $e');
   }
 }
 

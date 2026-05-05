@@ -286,9 +286,22 @@ class FirebaseService {
           }
           print('[Firebase] PASS: debounce check OK (${diff}s >= ${kDebounceWindowSeconds}s)');
         } catch (_) {
-          // If parsing fails, allow the event through.
-          print('[Firebase] WARN: could not parse timestamps for debounce '
-              '-- allowing event through');
+          // FIX: When NTP hasn't synced, ESP32 sends millis() as timestamp
+          // (e.g. "45123"). DateTime.parse() fails on these. Use numeric
+          // comparison as a fallback debounce to prevent duplicate alerts.
+          final lastMs = int.tryParse(_lastProcessedTimestamp!);
+          final thisMs = int.tryParse(accidentEvent.timestamp);
+          if (lastMs != null && thisMs != null) {
+            final diffMs = (thisMs - lastMs).abs();
+            if (diffMs < kDebounceWindowSeconds * 1000) {
+              print('[Firebase] SKIP: millis debounced (${diffMs}ms < ${kDebounceWindowSeconds * 1000}ms)');
+              return;
+            }
+            print('[Firebase] PASS: millis debounce OK (${diffMs}ms)');
+          } else {
+            print('[Firebase] WARN: could not parse timestamps for debounce '
+                '-- allowing event through');
+          }
         }
       } else {
         print('[Firebase] PASS: no previous event to debounce against');

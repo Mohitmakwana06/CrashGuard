@@ -119,7 +119,7 @@ class _BleScanScreenState extends ConsumerState<BleScanScreen> {
               ),
               const SizedBox(height: 16),
               Text(
-                'Pair your CrashGuard device to enable real-time accident detection and emergency cloud connectivity.',
+                'Pair your CrashGuard device to enable real-time accident detection and emergency cloud connectivity.\n\nNote: The device is only in pairing mode for 30 seconds after powering on.',
                 style: textTheme.bodyMedium?.copyWith(color: colorScheme.onSurfaceVariant),
                 textAlign: TextAlign.center,
               ),
@@ -259,7 +259,7 @@ class _BleScanScreenState extends ConsumerState<BleScanScreen> {
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  'Ensure your ESP32 is powered on\nand in pairing mode',
+                                  'Ensure your ESP32 is powered on\nand in pairing mode.\n(Restart device if it has been on for >30s)',
                                   textAlign: TextAlign.center,
                                   style: textTheme.bodySmall?.copyWith(
                                     color: colorScheme.onSurfaceVariant,
